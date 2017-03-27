@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="colorPrimary">@color/green400</color>
+    <color name="colorPrimaryDark">@color/green800</color>
+    <color name="colorAccent">@color/teal200</color>
+    <color name="gray800">#424242</color>
+    <color name="green400">#66BB6A</color>
+    <color name="green800">#2E7D32</color>
+    <color name="teal200">#80CBC4</color>
+    <color name="white">#FFFFFF</color>
+    <color name="black">#000000</color>
+    <color name="cyan500">#00BCD4</color>
+</resources>
