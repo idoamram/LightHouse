@@ -2,11 +2,15 @@ package flashlight.idevs.com.flashlight;
 
 import com.google.android.gms.ads.AdRequest;
 import com.google.android.gms.ads.AdView;
+import com.squareup.seismic.ShakeDetector;
 
 import android.Manifest;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.drawable.Drawable;
 import android.hardware.Camera;
+import android.hardware.SensorManager;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraManager;
 import android.os.Bundle;
@@ -14,57 +18,59 @@ import android.preference.PreferenceManager;
 import android.support.annotation.NonNull;
 import android.support.design.widget.FloatingActionButton;
 import android.support.v4.content.ContextCompat;
+import android.support.v4.graphics.drawable.DrawableCompat;
 import android.support.v7.app.AppCompatActivity;
 import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
-import android.widget.CompoundButton;
-import android.widget.Switch;
-import android.widget.Toast;
+import android.widget.ImageButton;
 
 import permissions.dispatcher.NeedsPermission;
 import permissions.dispatcher.RuntimePermissions;
 
 @RuntimePermissions
-public class MainActivity extends AppCompatActivity {
+public class MainActivity extends AppCompatActivity implements ShakeDetector.Listener {
     private static final String TAG = "MainActivity";
 
     // Remove the below line after defining your own ad unit ID.
     private static final String TOAST_TEXT = "Test ads are being shown. "
             + "To show live ads, replace the ad unit ID in res/values/strings.xml with your own ad unit ID.";
-    public static final String AUTO_START_PREF = "auto_start_pref";
+
+    public static final String AD_MOB_AGENT = "Flash Light House";
+
+    private static final int SETTINGS_REQUEST_CODE = 5342;
+    private static final long SHAKING_DELAY = 1000;
+
     private boolean mIsScreenLightOn;
     private boolean mIsFlashLightOn;
     private Camera mCamera;
     private View mRootView;
     private FloatingActionButton mFabFlash;
     private FloatingActionButton mFabScreen;
-    private Switch mAutoStartSwitch;
+    private ImageButton mBtnKeepOnPause;
+    private ImageButton mBtnShaking;
+    private ImageButton mBtnAutoFlash;
+    private long mLastShakingTimestamp;
+    private boolean mIsFirstCreate = true;
+    private boolean mStartFlashOnResume;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
+        mLastShakingTimestamp = System.currentTimeMillis();
+
         // Load an ad into the AdMob banner view.
         AdView adView = (AdView) findViewById(R.id.adView);
         AdRequest adRequest = new AdRequest.Builder()
-                .setRequestAgent("android_studio:ad_template").build();
+                .setRequestAgent(AD_MOB_AGENT)
+                .addTestDevice("B2341FCC46F9A437CE957D4F9F961373")
+                .build();
         adView.loadAd(adRequest);
 
-        // Toasts the test ad message on the screen. Remove this after defining your own ad unit ID.
-        Toast.makeText(this, TOAST_TEXT, Toast.LENGTH_LONG).show();
-
         mRootView = findViewById(R.id.rootView);
-
-        mAutoStartSwitch = (Switch) findViewById(R.id.autoStartSwitch);
-        mAutoStartSwitch.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
-            @Override
-            public void onCheckedChanged(CompoundButton compoundButton, boolean b) {
-                PreferenceManager.getDefaultSharedPreferences(MainActivity.this).edit().putBoolean(AUTO_START_PREF, b).apply();
-            }
-        });
 
         mFabFlash = (FloatingActionButton) findViewById(R.id.fabFlash);
         mFabScreen = (FloatingActionButton) findViewById(R.id.fabScreen);
@@ -94,15 +100,114 @@ public class MainActivity extends AppCompatActivity {
                 }
             });
         }
+
+        mBtnAutoFlash = (ImageButton) findViewById(R.id.btnAutoFlash);
+        mBtnAutoFlash.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                PreferenceManager.getDefaultSharedPreferences(MainActivity.this).edit().putBoolean(getString(R.string.pref_auto_start_flash),
+                        !PreferenceManager.getDefaultSharedPreferences(MainActivity.this).getBoolean(getString(R.string.pref_auto_start_flash), true))
+                        .apply();
+                initAutoFlashIcon();
+            }
+        });
+
+        mBtnShaking = (ImageButton) findViewById(R.id.btnShaking);
+        mBtnShaking.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                PreferenceManager.getDefaultSharedPreferences(MainActivity.this).edit().putBoolean(getString(R.string.pref_use_device_shaking),
+                        !PreferenceManager.getDefaultSharedPreferences(MainActivity.this).getBoolean(getString(R.string.pref_use_device_shaking), true))
+                        .apply();
+                initShakingIcon();
+            }
+        });
+
+        mBtnKeepOnPause = (ImageButton) findViewById(R.id.btnKeepOnPause);
+        mBtnKeepOnPause.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                PreferenceManager.getDefaultSharedPreferences(MainActivity.this).edit().putBoolean(getString(R.string.pref_keep_flash_on_pause),
+                        !PreferenceManager.getDefaultSharedPreferences(MainActivity.this).getBoolean(getString(R.string.pref_keep_flash_on_pause), true))
+                        .apply();
+                initKeepOnPauseIcon();
+            }
+        });
+
+        initButtons();
+
+        boolean autoStartFlash = PreferenceManager.getDefaultSharedPreferences(this).getBoolean(getString(R.string.pref_auto_start_flash), true);
+        if (autoStartFlash && !mIsFlashLightOn) {
+            MainActivityPermissionsDispatcher.startFlashWithCheck(this);
+        }
+
+        SensorManager sensorManager = (SensorManager) getSystemService(SENSOR_SERVICE);
+        ShakeDetector sd = new ShakeDetector(this);
+        sd.start(sensorManager);
+    }
+
+    private void initButtons() {
+        initAutoFlashIcon();
+
+        initShakingIcon();
+
+        initKeepOnPauseIcon();
+    }
+
+    private void initKeepOnPauseIcon() {
+        Drawable keepOnPauseDrawable = mBtnKeepOnPause.getDrawable().mutate();
+        if (PreferenceManager.getDefaultSharedPreferences(MainActivity.this).getBoolean(getString(R.string.pref_keep_flash_on_pause), true)) {
+            DrawableCompat.setTint(keepOnPauseDrawable, ContextCompat.getColor(this, R.color.green400));
+        } else {
+            DrawableCompat.setTint(keepOnPauseDrawable, ContextCompat.getColor(this, R.color.gray800));
+        }
+        mBtnKeepOnPause.setImageDrawable(keepOnPauseDrawable);
+    }
+
+    private void initShakingIcon() {
+        Drawable shakingDrawable = mBtnShaking.getDrawable().mutate();
+        if (PreferenceManager.getDefaultSharedPreferences(MainActivity.this).getBoolean(getString(R.string.pref_use_device_shaking), true)) {
+            DrawableCompat.setTint(shakingDrawable, ContextCompat.getColor(this, R.color.green400));
+        } else {
+            DrawableCompat.setTint(shakingDrawable, ContextCompat.getColor(this, R.color.gray800));
+        }
+        mBtnShaking.setImageDrawable(shakingDrawable);
+    }
+
+    private void initAutoFlashIcon() {
+        Drawable autoFlashDrawable = mBtnAutoFlash.getDrawable().mutate();
+        if (PreferenceManager.getDefaultSharedPreferences(MainActivity.this).getBoolean(getString(R.string.pref_auto_start_flash), true)) {
+            DrawableCompat.setTint(autoFlashDrawable, ContextCompat.getColor(this, R.color.green400));
+        } else {
+            DrawableCompat.setTint(autoFlashDrawable, ContextCompat.getColor(this, R.color.gray800));
+        }
+        mBtnAutoFlash.setImageDrawable(autoFlashDrawable);
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        boolean autoStartFlash = PreferenceManager.getDefaultSharedPreferences(this).getBoolean(AUTO_START_PREF, true);
-        mAutoStartSwitch.setChecked(autoStartFlash);
-        if (autoStartFlash && !mIsFlashLightOn) {
-            MainActivityPermissionsDispatcher.startFlashWithCheck(this);
+        boolean keepOnPause = PreferenceManager.getDefaultSharedPreferences(this).getBoolean(getString(R.string.pref_keep_flash_on_pause), true);
+        boolean autoFlash = PreferenceManager.getDefaultSharedPreferences(this).getBoolean(getString(R.string.pref_auto_start_flash), true);
+        if (mIsFirstCreate) {
+            if (autoFlash) {
+                MainActivityPermissionsDispatcher.startFlashWithCheck(this);
+            }
+        } else {
+            if (!keepOnPause && !mIsFlashLightOn && mStartFlashOnResume) {
+                MainActivityPermissionsDispatcher.startFlashWithCheck(this);
+            }
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        mIsFirstCreate = false;
+        mStartFlashOnResume = mIsFlashLightOn;
+        boolean keepOnPause = PreferenceManager.getDefaultSharedPreferences(this).getBoolean(getString(R.string.pref_keep_flash_on_pause), true);
+        if (!keepOnPause) {
+            MainActivityPermissionsDispatcher.stopFlashWithCheck(this);
         }
     }
 
@@ -186,10 +291,34 @@ public class MainActivity extends AppCompatActivity {
         int id = item.getItemId();
 
         if (id == R.id.action_settings) {
+            startActivityForResult(new Intent(MainActivity.this, SettingsActivity.class), SETTINGS_REQUEST_CODE);
             return true;
         }
 
         return super.onOptionsItemSelected(item);
     }
 
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+
+        if (resultCode == RESULT_OK) {
+            if (requestCode == SETTINGS_REQUEST_CODE) {
+                initButtons();
+            }
+        }
+    }
+
+    @Override
+    public void hearShake() {
+        if (PreferenceManager.getDefaultSharedPreferences(this).getBoolean(getString(R.string.pref_use_device_shaking), true) &&
+                (System.currentTimeMillis() - mLastShakingTimestamp) > SHAKING_DELAY) {
+            mLastShakingTimestamp = System.currentTimeMillis();
+            if (mIsFlashLightOn) {
+                MainActivityPermissionsDispatcher.stopFlashWithCheck(this);
+            } else {
+                MainActivityPermissionsDispatcher.startFlashWithCheck(this);
+            }
+        }
+    }
 }
